@@ -1,0 +1,13 @@
+
+# GesturesMed - Contactless Hospital Interface System
+# Python 3.8+ required
+
+# Core Dependencies
+opencv-python>=4.8.0
+mediapipe>=0.10.0
+numpy>=1.24.0
+
+# Image Processing
+Pillow>=10.0.0
+
+# Note: Install with: pip install -r requirements.txt
