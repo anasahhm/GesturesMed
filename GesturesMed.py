@@ -7,6 +7,7 @@ from collections import deque
 from datetime import datetime
 import json
 
+
 class GestureRecognizer:
     """Advanced gesture recognition for medical interface."""
     
@@ -277,6 +278,7 @@ class NotificationManager:
             self.notifications[-1].draw(frame, y_offset=0)
 
 
+
 class PatientActionHandler:
     """Handles patient-specific actions."""
     
@@ -384,6 +386,8 @@ class PatientActionHandler:
         return action_taken
 
 
+
+
 class DoctorActionHandler:
     """Handles doctor-specific actions."""
     
@@ -476,7 +480,6 @@ class DoctorActionHandler:
 
 
 
-
 class HandTracker:
     """MediaPipe hand tracking."""
     
@@ -532,6 +535,14 @@ class GestureMedApp:
         self.show_help = True
         self.show_action_log = True
         
+        # Sub-modes for enhanced features
+        self.patient_view = "MAIN"  # MAIN, PAIN_MAP, ENVIRONMENT, COMMUNICATION
+        
+        # Room environment state
+        self.room_temp = 72  # Fahrenheit
+        self.room_brightness = 50  # Percentage
+        self.bed_position = 0  # -30 to +60 degrees
+        
         # FPS
         self.fps_history = deque(maxlen=30)
         self.last_frame_time = time.time()
@@ -542,6 +553,7 @@ class GestureMedApp:
     def switch_mode(self):
         """Switch between Patient and Doctor modes."""
         self.mode = "DOCTOR" if self.mode == "PATIENT" else "PATIENT"
+        self.patient_view = "MAIN"  # Reset patient view
         mode_name = "Doctor Mode" if self.mode == "DOCTOR" else "Patient Mode"
         self.notification_manager.add(f"Switched to {mode_name}", "info", 3.0)
     
@@ -552,12 +564,17 @@ class GestureMedApp:
         # Mode indicator (top left)
         mode_color = (100, 200, 255) if self.mode == "PATIENT" else (255, 150, 100)
         mode_icon = "🤒" if self.mode == "PATIENT" else "👨‍⚕️"
-        mode_text = f"{mode_icon} {self.mode} MODE"
+        
+        if self.mode == "PATIENT" and self.patient_view != "MAIN":
+            view_name = self.patient_view.replace("_", " ")
+            mode_text = f"{mode_icon} {view_name}"
+        else:
+            mode_text = f"{mode_icon} {self.mode} MODE"
         
         cv2.rectangle(frame, (10, 10), (300, 70), (20, 20, 20), -1)
         cv2.rectangle(frame, (10, 10), (300, 70), mode_color, 3)
         cv2.putText(frame, mode_text, (25, 50),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.9, mode_color, 2, cv2.LINE_AA)
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, mode_color, 2, cv2.LINE_AA)
         
         # Current gesture display (top right)
         gesture = self.gesture_recognizer.current_gesture
@@ -610,6 +627,36 @@ class GestureMedApp:
         # Help panel (bottom right)
         if self.show_help:
             self.draw_help_panel(frame)
+        
+        # Quick access menu for patient mode
+        if self.mode == "PATIENT" and self.patient_view == "MAIN":
+            # Draw quick menu inline
+            h, w = frame.shape[:2]
+            menu_items = [
+                ("1", "Pain Map"),
+                ("2", "Environment"),
+                ("3", "Communication")
+            ]
+            
+            menu_width = 200
+            menu_height = len(menu_items) * 40 + 40
+            x_start = w - menu_width - 10
+            y_start = 80
+            
+            # Background
+            cv2.rectangle(frame, (x_start, y_start), 
+                         (w - 10, y_start + menu_height), (20, 20, 20), -1)
+            cv2.rectangle(frame, (x_start, y_start), 
+                         (w - 10, y_start + menu_height), (100, 200, 255), 2)
+            
+            cv2.putText(frame, "QUICK ACCESS", (x_start + 20, y_start + 25),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+            
+            y = y_start + 50
+            for key, item in menu_items:
+                cv2.putText(frame, f"{key}. {item}", (x_start + 20, y),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1, cv2.LINE_AA)
+                y += 40
         
         # FPS counter
         fps = int(np.mean(self.fps_history)) if len(self.fps_history) > 0 else 0
@@ -687,12 +734,179 @@ class GestureMedApp:
                 
                 # Handle gesture based on mode
                 if self.mode == "PATIENT":
-                    self.patient_handler.handle_gesture(gesture, metadata, self.notification_manager)
+                    if self.patient_view == "MAIN":
+                        self.patient_handler.handle_gesture(gesture, metadata, self.notification_manager)
+                    elif self.patient_view == "PAIN_MAP":
+                        # Handle pain map gestures inline
+                        hold_duration = metadata.get('hold_duration', 0)
+                        if gesture.startswith("FINGERS_") and hold_duration > 1.0:
+                            finger_count = metadata.get('count', 0)
+                            if 1 <= finger_count <= 5:
+                                index_tip = hand_landmarks.landmark[8]
+                                location = "Head" if index_tip.y < 0.3 else "Chest" if index_tip.y < 0.5 else "Abdomen" if index_tip.y < 0.7 else "Lower body"
+                                self.notification_manager.add(
+                                    f"Pain: {location} - Level {finger_count}/5 recorded", 
+                                    "warning" if finger_count >= 4 else "info", 4.0
+                                )
+                    elif self.patient_view == "ENVIRONMENT":
+                        # Handle environment gestures inline
+                        hold_duration = metadata.get('hold_duration', 0)
+                        if hold_duration > 0.5:
+                            if gesture == "OPEN_PALM":
+                                middle_tip = hand_landmarks.landmark[12]
+                                hand_height = 1 - middle_tip.y
+                                target_temp = int(60 + hand_height * 20)
+                                if abs(target_temp - self.room_temp) > 1:
+                                    self.room_temp = target_temp
+                                    self.notification_manager.add(
+                                        f"Temperature: {self.room_temp}F", "info", 2.0
+                                    )
+                            elif gesture == "PINCH":
+                                self.room_brightness = int((1 - min(hold_duration, 1.0)) * 100)
+                                self.notification_manager.add(
+                                    f"Brightness: {self.room_brightness}%", "info", 2.0
+                                )
+                    elif self.patient_view == "COMMUNICATION":
+                        # Handle communication gestures inline
+                        hold_duration = metadata.get('hold_duration', 0)
+                        if gesture.startswith("FINGERS_") and hold_duration > 1.0:
+                            finger_count = metadata.get('count', 0)
+                            phrases = ["YES", "NO", "THANK YOU", "BATHROOM", "PAIN", "HELP"]
+                            if 1 <= finger_count <= len(phrases):
+                                phrase = phrases[finger_count - 1]
+                                self.notification_manager.add(
+                                    f"Communicating: {phrase}", "success", 3.0
+                                )
                 else:
                     self.doctor_handler.handle_gesture(gesture, metadata, self.notification_manager)
         
         # Draw UI
         self.draw_ui(frame)
+        
+        # Draw feature-specific overlays
+        if self.mode == "PATIENT":
+            if self.patient_view == "PAIN_MAP":
+                # Draw pain map inline
+                h, w = frame.shape[:2]
+                overlay = frame.copy()
+                cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 0), -1)
+                cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
+                
+                cv2.putText(frame, "PAIN BODY MAP - Point to area of pain", 
+                           (w//2 - 250, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, 
+                           (100, 200, 255), 2, cv2.LINE_AA)
+                
+                center_x, center_y = w // 2, h // 2
+                cv2.circle(frame, (center_x, center_y - 150), 40, (100, 200, 255), 3)
+                cv2.rectangle(frame, (center_x - 60, center_y - 110), 
+                             (center_x + 60, center_y + 80), (100, 200, 255), 3)
+                cv2.line(frame, (center_x - 60, center_y - 80), 
+                        (center_x - 120, center_y - 20), (100, 200, 255), 3)
+                cv2.line(frame, (center_x + 60, center_y - 80), 
+                        (center_x + 120, center_y - 20), (100, 200, 255), 3)
+                cv2.line(frame, (center_x - 50, center_y + 80), 
+                        (center_x - 50, center_y + 180), (100, 200, 255), 3)
+                cv2.line(frame, (center_x + 50, center_y + 80), 
+                        (center_x + 50, center_y + 180), (100, 200, 255), 3)
+                
+                cv2.putText(frame, "Point + Show 1-5 fingers for pain level", 
+                           (w//2 - 280, h - 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, 
+                           (255, 255, 100), 1, cv2.LINE_AA)
+                cv2.putText(frame, "Press ESC or 0 to return", 
+                           (w//2 - 150, h - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, 
+                           (255, 255, 255), 1, cv2.LINE_AA)
+                           
+            elif self.patient_view == "ENVIRONMENT":
+                # Draw environment controls inline
+                h, w = frame.shape[:2]
+                overlay = frame.copy()
+                cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 0), -1)
+                cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
+                
+                cv2.putText(frame, "ROOM ENVIRONMENT CONTROLS", 
+                           (w//2 - 230, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.9, 
+                           (100, 255, 100), 2, cv2.LINE_AA)
+                
+                controls_y = 120
+                spacing = 140
+                
+                # Temperature
+                temp_color = (100, 200, 255)
+                cv2.putText(frame, f"TEMPERATURE: {self.room_temp}F", 
+                           (100, controls_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, 
+                           temp_color, 2, cv2.LINE_AA)
+                cv2.rectangle(frame, (100, controls_y + 20), (w - 100, controls_y + 60),
+                             temp_color, 2)
+                temp_progress = int((self.room_temp - 60) / 20 * (w - 220))
+                cv2.rectangle(frame, (100, controls_y + 20), (100 + temp_progress, controls_y + 60),
+                             temp_color, -1)
+                cv2.putText(frame, "Hand UP/DOWN to adjust", (120, controls_y + 48),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+                
+                # Brightness
+                controls_y += spacing
+                bright_color = (255, 255, 100)
+                cv2.putText(frame, f"LIGHTING: {self.room_brightness}%", 
+                           (100, controls_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, 
+                           bright_color, 2, cv2.LINE_AA)
+                cv2.rectangle(frame, (100, controls_y + 20), (w - 100, controls_y + 60),
+                             bright_color, 2)
+                bright_progress = int(self.room_brightness / 100 * (w - 200))
+                cv2.rectangle(frame, (100, controls_y + 20), (100 + bright_progress, controls_y + 60),
+                             bright_color, -1)
+                cv2.putText(frame, "Pinch to adjust", (120, controls_y + 48),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+                
+                cv2.putText(frame, "Press ESC or 0 to return", 
+                           (w//2 - 150, h - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, 
+                           (255, 255, 255), 1, cv2.LINE_AA)
+                           
+            elif self.patient_view == "COMMUNICATION":
+                # Draw communication board inline
+                h, w = frame.shape[:2]
+                overlay = frame.copy()
+                cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 0), -1)
+                cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
+                
+                cv2.putText(frame, "COMMUNICATION BOARD", 
+                           (w//2 - 180, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.9, 
+                           (255, 200, 100), 2, cv2.LINE_AA)
+                
+                phrases = [
+                    ("YES", (100, 255, 100)),
+                    ("NO", (255, 100, 100)),
+                    ("THANK YOU", (255, 255, 100)),
+                    ("BATHROOM", (100, 200, 255)),
+                    ("PAIN", (255, 150, 150)),
+                    ("HELP", (255, 100, 100)),
+                ]
+                
+                cols = 3
+                card_w = 250
+                card_h = 120
+                start_x = (w - (cols * card_w + (cols - 1) * 20)) // 2
+                start_y = 120
+                
+                for i, (text, color) in enumerate(phrases):
+                    row = i // cols
+                    col = i % cols
+                    x = start_x + col * (card_w + 20)
+                    y = start_y + row * (card_h + 20)
+                    
+                    cv2.rectangle(frame, (x, y), (x + card_w, y + card_h), color, 2)
+                    cv2.rectangle(frame, (x, y), (x + card_w, y + card_h), 
+                                 tuple(int(c * 0.2) for c in color), -1)
+                    cv2.putText(frame, text, (x + card_w//2 - len(text) * 8, y + card_h//2 + 10),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2, cv2.LINE_AA)
+                    cv2.putText(frame, str(i + 1), (x + 10, y + 25),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1, cv2.LINE_AA)
+                
+                cv2.putText(frame, "Show fingers (1-6) to select phrase", 
+                           (w//2 - 220, h - 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, 
+                           (255, 255, 100), 1, cv2.LINE_AA)
+                cv2.putText(frame, "Press ESC or 0 to return", 
+                           (w//2 - 150, h - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, 
+                           (255, 255, 255), 1, cv2.LINE_AA)
         
         # Update and draw notifications
         self.notification_manager.update_and_draw(frame)
@@ -743,13 +957,32 @@ class GestureMedApp:
             
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q') or key == 27:
-                self.running = False
+                # ESC key behavior
+                if self.mode == "PATIENT" and self.patient_view != "MAIN":
+                    self.patient_view = "MAIN"
+                    self.notification_manager.add("Returned to main menu", "info", 2.0)
+                else:
+                    self.running = False
             elif key == ord('m'):
                 self.switch_mode()
             elif key == ord('h'):
                 self.show_help = not self.show_help
             elif key == ord('l'):
                 self.show_action_log = not self.show_action_log
+            elif key == ord('1') and self.mode == "PATIENT" and self.patient_view == "MAIN":
+                self.patient_view = "PAIN_MAP"
+                self.notification_manager.add("Pain Map Activated", "info", 2.0)
+            elif key == ord('2') and self.mode == "PATIENT" and self.patient_view == "MAIN":
+                self.patient_view = "ENVIRONMENT"
+                self.notification_manager.add("Environment Controls Activated", "info", 2.0)
+            elif key == ord('3') and self.mode == "PATIENT" and self.patient_view == "MAIN":
+                self.patient_view = "COMMUNICATION"
+                self.notification_manager.add("Communication Board Activated", "info", 2.0)
+            elif key == ord('0'):
+                # 0 key always returns to main
+                if self.patient_view != "MAIN":
+                    self.patient_view = "MAIN"
+                    self.notification_manager.add("Returned to main menu", "info", 2.0)
         
         # Print summary
         print("\n" + "=" * 80)
